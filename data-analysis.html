@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Sales &amp; Inventory Analysis — Case Study</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #008675; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #666; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
+    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #008675; z-index: 9999; }
+    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
+    #__bundler_placeholder { color: #999; font-size: 14px; }
+  </style>
+  <noscript>
+    <style>#__bundler_loading { display: none; }</style>
+    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#999;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
+      This page requires JavaScript to display.
+    </div>
+  </noscript>
+</head>
+<body>
+  <div id="__bundler_thumbnail">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="800" fill="#008675"></rect>
+      <g fill="#ffffff"><rect x="380" y="430" width="80" height="210" rx="10"></rect><rect x="500" y="330" width="80" height="310" rx="10"></rect><rect x="620" y="500" width="80" height="140" rx="10"></rect><rect x="740" y="260" width="80" height="380" rx="10"></rect></g>
+    </svg>
+  </div>
+  <div id="__bundler_loading">Unpacking...</div>
+
+  <script>
+    
+document.addEventListener('DOMContentLoaded', async function() {
+  const loading = document.getElementById('__bundler_loading');
+  function setStatus(msg) { if (loading) loading.textContent = msg; }
+
+  // Error sink persists across replaceWith since it's on window, not the DOM.
+  window.addEventListener('error', function(e) {
+    var p = document.body || document.documentElement;
+    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
+    d.id = '__bundler_err';
+    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
+      '[bundle] ' + (e.message || e.type) +
+      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
+  }, true);
+
+  try {
+    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
+    const templateEl = document.querySelector('script[type="__bundler/template"]');
+    if (!manifestEl || !templateEl) {
+      setStatus('Error: missing bundle data');
+      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
+      return;
+    }
+
+    const manifest = JSON.parse(manifestEl.textContent);
+    let template = JSON.parse(templateEl.textContent);
+
+    const uuids = Object.keys(manifest);
+    setStatus('Unpacking ' + uuids.length + ' assets...');
+
+    const blobUrls = {};
+    await Promise.all(uuids.map(async (uuid) => {
+      const entry = manifest[uuid];
+      try {
+        const binaryStr = atob(entry.data);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        let finalBytes = bytes;
+        if (entry.compressed) {
+          if (typeof DecompressionStream !== 'undefined') {
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            const reader = ds.readable.getReader();
+            writer.write(bytes);
+            writer.close();
+            const chunks = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalLen += value.length;
+            }
+            finalBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
+          } else {
+            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+          }
+        }
+
+        blobUrls[uuid] = URL.createObjectURL(new Blob([finalBytes], { type: entry.mime }));
+      } catch (err) {
+        console.error('Failed to decode asset ' + uuid + ':', err);
+        blobUrls[uuid] = URL.createObjectURL(new Blob([], { type: entry.mime }));
+      }
+    }));
+
+    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
+    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
+    const resourceMap = {};
+    for (const entry of extResources) {
+      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
+    }
+
+    setStatus('Rendering...');
+    for (const uuid of uuids) template = template.split(uuid).join(blobUrls[uuid]);
+
+    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
+    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
+    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
+
+    const resourceScript = '<script>window.__resources = ' +
+      JSON.stringify(resourceMap).split('</' + 'script>').join('<\\/' + 'script>') +
+      ';</' + 'script>';
+    // Inject after <head> so the DOCTYPE stays first; prepending the script
+    // would push the parser into quirks mode. DOMParser always emits a <head>
+    // (synthesizing one if the source HTML omitted it) but may carry
+    // attributes through, so match the full opening tag. slice() rather than
+    // replace() keeps us clear of $-pattern substitution in resourceScript.
+    const headOpen = template.match(/<head[^>]*>/i);
+    if (headOpen) {
+      const i = headOpen.index + headOpen[0].length;
+      template = template.slice(0, i) + resourceScript + template.slice(i);
+    }
+
+    // Parse the template and swap the root element. Scripts inserted via
+    // DOMParser/replaceWith are inert per spec — re-create each with
+    // createElement so they execute, awaiting onload for src scripts to
+    // preserve ordering (React before ReactDOM before Babel before text/babel).
+    const doc = new DOMParser().parseFromString(template, 'text/html');
+    document.documentElement.replaceWith(doc.documentElement);
+    const dead = Array.from(document.scripts);
+    for (const old of dead) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent;
+      // text/babel scripts with a src: fetch and inline. transformScriptTags
+      // does XHR against the src, but blob:null/ from a file:// origin is
+      // silently dropped. Inlining makes it a plain inline babel script,
+      // which transformScriptTags handles unconditionally.
+      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
+        const r = await fetch(s.src);
+        s.textContent = await r.text();
+        s.removeAttribute('src');
+      }
+      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
+      old.replaceWith(s);
+      if (p) await p;
+    }
+    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
+    // which fired before we swapped the document. Trigger manually if present.
+    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
+      window.Babel.transformScriptTags();
+    }
+  } catch (err) {
+    setStatus('Error unpacking: ' + err.message);
+    console.error('Bundle unpack error:', err);
+  }
+});
+
+  </script>
+
+  <script type="__bundler/manifest">
+{"fb407d20-9074-42b3-9224-e0b8c59353c2":{"mime":"application/javascript","compressed":true,"data":"H4sIAAAAAAAACo2SsW7DIBCG9zzFdQKklBeIGFLJQ6UOlTpWHQg+OygEXDi7saK8e2WXOEmbRlkQOu7+/+cDXrXekA2ei/0MoNMREo6FBAqWMepeNjFQoL5BmZw1KI12jpfBtFv0JD9bjP0bOjQU4tI5zmRWYEIsZgBHBzAuJBw6cGewodEQJjtZhVhos+ZToiT2YCueHpTKE5CkcTqlF5tIRtyGDjnThmyHTCzgMPodZgC30q0DMfHXbUU+J1qRl7osiw49DU7oMXJmnDUbNp+uwzG3A6BMFJrXGBpd6x+Yi3yUgYI6RaqRCofD9ql/LgffobQkinbVEnJWatKPpGONlBEelUKDHtQgeMbBBE/a+nRGIo9MwBOaqXg5TKGu3QniHB4Gj9yceY7rDaLvY+DR7OMa2V0GtbuT6lWep8v41rnTY1+Gu8NA7P+RuiGywb4MX/53TltxlBvslVKsSEY3yMRV8YMYfsQ3LYw1e2wDAAA="}}
+  </script>
+
+  <script type="__bundler/ext_resources">
+[]
+  </script>
+
+  <script type="__bundler/template">
+"<!DOCTYPE html>\n<html lang=\"en\"><head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n<title>Sales &amp; Inventory Analysis — Case Study<\u002Ftitle>\n<style>:root{\n  --navy:#1f2937;\n  --ink:#2b3543;\n  --muted:#7b8694;\n  --line:#e7ebf0;\n  --paper:#ffffff;\n  --blue:#0082e5;\n  --orange:#ff7c00;\n  --teal:#008675;\n  --peri:#7398d0;\n  --font:\"Neue Haas Grotesk Display Pro\",\"Helvetica Neue\",Helvetica,Arial,sans-serif;\n  --mono:\"SFMono-Regular\",ui-monospace,\"Cascadia Mono\",\"Roboto Mono\",Menlo,Consolas,monospace;\n}\n*{ box-sizing:border-box; }\nhtml,body{\n  margin:0; min-height:100%;\n  font-family:var(--font);\n  color:var(--navy);\n  background:#e9edf2;\n  background-image:\n    linear-gradient(45deg,#dfe5ec 25%,transparent 25%),\n    linear-gradient(-45deg,#dfe5ec 25%,transparent 25%),\n    linear-gradient(45deg,transparent 75%,#dfe5ec 75%),\n    linear-gradient(-45deg,transparent 75%,#dfe5ec 75%);\n  background-size:28px 28px;\n  background-position:0 0,0 14px,14px -14px,-14px 0;\n}\na{ color:inherit; text-decoration:none; }\n.stage{ display:flex; flex-direction:column; align-items:center; gap:18px; padding:40px 28px 56px; }\n\n/* ---------- Browser window ---------- */\n.browser{\n  width:1180px; max-width:100%;\n  background:var(--paper);\n  border-radius:22px;\n  box-shadow:0 30px 70px rgba(31,41,55,.22);\n  overflow:hidden;\n  position:relative;\n}\n.chrome{\n  display:flex; align-items:center; gap:14px;\n  padding:14px 20px;\n  background:#f3f5f8;\n  border-bottom:1px solid var(--line);\n}\n.dots{ display:flex; gap:8px; }\n.dots i{ width:13px; height:13px; border-radius:50%; display:block; }\n.dots i:nth-child(1){ background:#ff5f57; }\n.dots i:nth-child(2){ background:#febc2e; }\n.dots i:nth-child(3){ background:#28c840; }\n.url{\n  flex:1; display:flex; align-items:center; gap:9px;\n  background:#fff; border:1px solid var(--line); border-radius:999px;\n  padding:9px 16px; font-size:14px; color:var(--muted); font-weight:500;\n  max-width:560px;\n}\n.url .lock{ width:12px; height:12px; border:2px solid #b6bfca; border-radius:3px; position:relative; flex:none; }\n.url .lock::before{ content:\"\"; position:absolute; left:1px; top:-5px; width:8px; height:7px; border:2px solid #b6bfca; border-bottom:none; border-radius:6px 6px 0 0; }\n.chrome .back{\n  display:inline-flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600;\n  color:var(--ink); background:#fff; border:1px solid var(--line); border-radius:999px;\n  padding:8px 15px 8px 12px; flex:none; transition:background .15s ease,border-color .15s ease;\n}\n.chrome .back:hover{ background:#eef2f6; border-color:#d7dee6; }\n.chrome .back .arr{ font-size:15px; line-height:1; }\n\n/* ---------- Section + page scaffolding ---------- */\n.page{ padding:0; }\n.section{ position:relative; }\n.section-inner{ padding:40px 56px; }\n.eyebrow{ display:inline-flex; align-items:center; gap:9px; font-size:13px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:var(--blue); margin:0 0 16px; }\n.eyebrow .sq{ width:9px; height:9px; border-radius:2px; background:currentColor; }\n.label{ font-size:13px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }\n.h2{ font-size:27px; font-weight:800; margin:0 0 24px; letter-spacing:-.005em; }\n\n/* ---------- Hotspots ---------- */\n.hot{\n  position:absolute; top:30px; right:40px; z-index:6;\n  width:46px; height:46px; border-radius:50%;\n  border:none; cursor:pointer; padding:0;\n  font-family:var(--font); font-size:20px; font-weight:800; color:#fff;\n  display:flex; align-items:center; justify-content:center;\n  box-shadow:0 8px 20px rgba(31,41,55,.28);\n  transition:transform .15s ease;\n}\n.hot::before{\n  content:\"\"; position:absolute; inset:-6px; border-radius:50%;\n  border:2px solid currentColor; opacity:.5;\n  animation:pulse 2.2s ease-out infinite;\n}\n@keyframes pulse{ 0%{ transform:scale(.75); opacity:.7;} 80%,100%{ transform:scale(1.5); opacity:0;} }\n@media (prefers-reduced-motion:reduce){ .hot::before{ animation:none; } }\n.hot:hover{ transform:scale(1.08); }\n.hot.b{ background:var(--blue); color:var(--blue); }\n.hot.o{ background:var(--orange); color:var(--orange); }\n.hot.t{ background:var(--teal); color:var(--teal); }\n.hot span{ color:#fff; position:relative; z-index:1; }\n\n.section.active::after{\n  content:\"\"; position:absolute; inset:10px; border-radius:18px; pointer-events:none;\n  box-shadow:0 0 0 3px var(--rc, var(--blue)), 0 0 0 10px color-mix(in srgb,var(--rc,var(--blue)) 16%, transparent);\n}\n.section.b{ --rc:var(--blue); }\n.section.o{ --rc:var(--orange); }\n.section.t{ --rc:var(--teal); }\n\n.reveal{\n  position:absolute; top:84px; right:40px; z-index:7; width:392px;\n  background:#fff; border-radius:16px; padding:22px 24px 24px;\n  box-shadow:0 24px 54px rgba(31,41,55,.26);\n  border-top:5px solid var(--rc,var(--blue));\n  opacity:0; transform:translateY(-8px); pointer-events:none;\n  transition:opacity .18s ease, transform .18s ease;\n}\n.section.active .reveal{ opacity:1; transform:translateY(0); pointer-events:auto; }\n.reveal h4{ margin:0 0 9px; font-size:15px; font-weight:800; letter-spacing:.02em; color:var(--rc,var(--blue)); display:flex; align-items:center; gap:9px; }\n.reveal h4 .n{ width:22px; height:22px; border-radius:50%; background:var(--rc,var(--blue)); color:#fff; font-size:13px; display:inline-flex; align-items:center; justify-content:center; }\n.reveal p{ margin:0; font-size:15px; line-height:1.5; color:var(--ink); }\n.reveal .x{ position:absolute; top:14px; right:16px; width:24px; height:24px; border:none; background:#f1f4f7; border-radius:50%; cursor:pointer; color:var(--muted); font-size:15px; line-height:1; }\n.reveal .x:hover{ background:#e6eaef; }\n\n.legend{ font-size:13.5px; color:#5a6573; background:rgba(255,255,255,.82); padding:9px 18px; border-radius:999px; font-weight:500; text-align:center; }\n.legend b{ color:var(--navy); font-weight:700; }\n\n/* ---------- Chips ---------- */\n.meta{ display:flex; flex-wrap:wrap; gap:10px; margin:0 0 22px; }\n.chip{ font-size:14px; font-weight:600; color:var(--ink); background:#fff; border:1px solid #dbe6f0; padding:8px 15px; border-radius:999px; display:inline-flex; align-items:center; gap:8px; }\n.chip .d{ width:7px; height:7px; border-radius:50%; background:var(--blue); }\n\n/* ============================================================\n   HOME PAGE\n   ============================================================ */\n.intro{ background:linear-gradient(180deg,#eef6fd 0%,#f7fbff 100%); border-bottom:1px solid #e3edf6; }\n.intro-grid{ display:grid; grid-template-columns:1fr 232px; gap:48px; align-items:start; }\n.intro h1{ font-size:50px; line-height:1.02; font-weight:800; margin:0 0 8px; letter-spacing:-.015em; }\n.intro .role-line{ font-size:22px; font-weight:700; color:var(--blue); margin:0 0 20px; }\n.intro .summary{ font-size:19px; line-height:1.55; color:var(--ink); max-width:620px; margin:0; font-weight:500; }\n.intro .summary b{ color:var(--navy); font-weight:700; }\n.avatar{\n  width:232px; height:232px; border-radius:20px; overflow:hidden; position:relative;\n  border:1px solid #d6e3f0;\n}\n.contact-row{ display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }\n.contact-row .clink{\n  display:inline-flex; align-items:center; gap:9px; font-size:14.5px; font-weight:600; color:var(--ink);\n  background:#fff; border:1px solid #dbe6f0; border-radius:999px; padding:9px 16px;\n  transition:border-color .15s ease, transform .15s ease;\n}\n.contact-row .clink:hover{ border-color:var(--blue); transform:translateY(-1px); }\n.contact-row .clink .ic{ width:15px; height:15px; flex:none; color:var(--blue); }\n\n.skills{ background:#fff; border-bottom:1px solid var(--line); }\n.skillset{ display:flex; flex-direction:column; gap:18px; }\n.skillgroup{ display:grid; grid-template-columns:170px 1fr; gap:24px; align-items:baseline; }\n.skillgroup .gl{ font-size:13px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }\n.tools{ display:flex; flex-wrap:wrap; gap:9px; }\n.tool{ font-size:14px; font-weight:600; color:var(--ink); background:#fafbfc; border:1px solid var(--line); padding:8px 14px; border-radius:9px; }\n.tool.key{ background:#eef6fd; border-color:#cfe3f5; color:var(--blue); }\n\n.work{ background:linear-gradient(180deg,#fbfcfd 0%,#fff 100%); }\n.cards{ display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }\n.card{\n  display:flex; flex-direction:column; background:#fff; border:1px solid var(--line); border-radius:18px;\n  overflow:hidden; transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;\n}\n.card:hover{ transform:translateY(-4px); box-shadow:0 22px 44px rgba(31,41,55,.16); border-color:#d7dee6; }\n.card .thumb{ height:168px; position:relative; overflow:hidden; border-bottom:1px solid var(--line); }\n.card .body{ padding:22px 22px 24px; display:flex; flex-direction:column; flex:1; }\n.card .cat{ font-size:11.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; margin:0 0 9px; }\n.card.b .cat{ color:var(--blue); } .card.o .cat{ color:var(--orange); } .card.t .cat{ color:var(--teal); }\n.card h3{ font-size:21px; font-weight:800; line-height:1.18; margin:0 0 10px; letter-spacing:-.005em; }\n.card p{ font-size:15px; line-height:1.5; color:var(--muted); margin:0 0 18px; flex:1; }\n.card .result{ display:flex; gap:7px; flex-wrap:wrap; margin:0 0 20px; }\n.card .result .r{ font-size:12.5px; font-weight:700; padding:5px 10px; border-radius:7px; }\n.card.b .result .r{ background:#eef6fd; color:var(--blue); }\n.card.o .result .r{ background:#fff3e8; color:#d4670a; }\n.card.t .result .r{ background:#e8f7f3; color:var(--teal); }\n.card .cta{ display:inline-flex; align-items:center; gap:8px; font-size:14.5px; font-weight:700; }\n.card.b .cta{ color:var(--blue); } .card.o .cta{ color:#d4670a; } .card.t .cta{ color:var(--teal); }\n.card .cta .arr{ transition:transform .18s ease; }\n.card:hover .cta .arr{ transform:translateX(4px); }\n\n/* ============================================================\n   CASE STUDY PAGES\n   ============================================================ */\n.hero{ background:linear-gradient(180deg,#eef6fd 0%,#f7fbff 100%); border-bottom:1px solid #e3edf6; }\n.hero.o-hero{ background:linear-gradient(180deg,#fff4ea 0%,#fffbf7 100%); border-bottom-color:#f4e3d2; }\n.hero.t-hero{ background:linear-gradient(180deg,#eefaf6 0%,#f6fdfb 100%); border-bottom-color:#d3ece4; }\n.hero h1{ font-size:44px; line-height:1.05; font-weight:800; margin:0 0 18px; letter-spacing:-.01em; max-width:760px; }\n.lede{ font-size:21px; line-height:1.5; color:var(--ink); max-width:780px; margin:0; font-weight:500; }\n.lede b{ font-weight:700; color:var(--navy); }\n\n.role{ background:#fff; border-bottom:1px solid var(--line); }\n.grid{ display:grid; grid-template-columns:1.45fr .9fr; gap:48px; align-items:start; }\nul.did{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:16px; }\nul.did li{ position:relative; padding-left:38px; font-size:18px; line-height:1.45; color:var(--ink); font-weight:500; }\nul.did li b{ color:var(--navy); font-weight:700; }\nul.did li::before{\n  content:\"\"; position:absolute; left:0; top:2px; width:24px; height:24px; border-radius:7px;\n  background:rgba(255,124,0,.12);\n  background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12.5l4 4 10-10' fill='none' stroke='%23ff7c00' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\");\n  background-repeat:no-repeat; background-position:center; background-size:18px;\n}\n.toolbox{ background:#fafbfc; border:1px solid var(--line); border-radius:16px; padding:24px 24px 26px; }\n.toolbox .label{ margin-bottom:14px; }\n.atr{ margin-top:22px; font-size:13.5px; line-height:1.5; color:var(--muted); }\n.atr b{ color:var(--orange); font-weight:700; }\n\n.results{ background:linear-gradient(180deg,#eefaf6 0%,#f6fdfb 100%); }\n.stats{ display:flex; gap:20px; flex-wrap:wrap; margin:0 0 24px; }\n.stat{ background:#fff; border:1px solid #d6ece5; border-radius:16px; padding:22px 26px; min-width:200px; }\n.stat .num{ font-size:38px; font-weight:800; color:var(--teal); line-height:1; letter-spacing:-.01em; }\n.stat .cap{ font-size:14px; font-weight:600; color:var(--ink); margin-top:9px; }\n.learned{ font-size:19px; line-height:1.5; color:var(--ink); max-width:760px; margin:0; font-weight:500; }\n.learned .q{ color:var(--teal); font-weight:700; }\n\n/* ---------- Visuals: charts, dashboards, placeholders ---------- */\n.figure{ margin:0 0 30px; }\n.figure .cap-mono{ font-family:var(--mono); font-size:11.5px; letter-spacing:.02em; color:var(--muted); margin:10px 2px 0; }\n.panel{ background:#fff; border:1px solid var(--line); border-radius:16px; padding:24px 26px; box-shadow:0 10px 30px rgba(31,41,55,.06); }\n.panel-title{ font-size:14px; font-weight:700; color:var(--navy); margin:0 0 18px; display:flex; align-items:center; justify-content:space-between; }\n.panel-title .tag{ font-family:var(--mono); font-size:11px; font-weight:600; color:var(--muted); }\n\n/* placeholder image */\n.ph{\n  position:relative; border-radius:14px; overflow:hidden;\n  background-color:#eef1f5;\n  background-image:repeating-linear-gradient(45deg,#e2e7ee 0 10px,#eef1f5 10px 20px);\n  border:1px solid var(--line);\n  display:flex; align-items:flex-end;\n}\n.ph .ph-label{\n  font-family:var(--mono); font-size:11.5px; color:#6a7686; background:rgba(255,255,255,.86);\n  padding:7px 12px; margin:12px; border-radius:8px; border:1px solid var(--line); line-height:1.35;\n}\n.ph.round{ border-radius:50%; }\n\n/* KPI tiles */\n.kpis{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:0 0 18px; }\n.kpi{ background:#fafbfc; border:1px solid var(--line); border-radius:12px; padding:16px 18px; }\n.kpi .k-num{ font-size:28px; font-weight:800; line-height:1; letter-spacing:-.01em; }\n.kpi .k-cap{ font-size:12.5px; font-weight:600; color:var(--muted); margin-top:7px; }\n<\u002Fstyle>\n<\u002Fhead>\n<body>\n  \n  <div class=\"stage\">\n    <div class=\"browser\" data-screen-label=\"Case Study — Data Analysis\">\n      <div class=\"chrome\">\n        <a class=\"back\" href=\"index.html\"><span class=\"arr\">←<\u002Fspan> Portfolio<\u002Fa>\n        <div class=\"url\"><span class=\"lock\"><\u002Fspan>sarah-k.myportfolio.com/projects/sales-analysis<\u002Fdiv>\n      <\u002Fdiv>\n\n      <div class=\"page\">\n\n        <!-- ① CHALLENGE -->\n        <section class=\"section b\" id=\"s1\" data-screen-label=\"Section 1 — The Project / Challenge\">\n          <button class=\"hot b\" data-target=\"s1\" aria-label=\"Hotspot 1: The Project / Challenge\"><span>1<\u002Fspan><\u002Fbutton>\n          <div class=\"reveal\">\n            <button class=\"x\" data-close=\"\" aria-label=\"Close\">✕<\u002Fbutton>\n            <h4><span class=\"n\">1<\u002Fspan> The Project / Challenge<\u002Fh4>\n            <p>Explain what the project was, who it was for, and the problem you were solving. Keep it to 1–2 sentences.<\u002Fp>\n          <\u002Fdiv>\n          <div class=\"section-inner hero\">\n            <p class=\"eyebrow\"><span class=\"sq\"><\u002Fspan> Data Analysis · Self-initiated project<\u002Fp>\n            <h1>Sales &amp; Inventory Analysis with Python<\u002Fh1>\n            <div class=\"meta\">\n              <span class=\"chip\"><span class=\"d\"><\u002Fspan> Small online bookshop<\u002Fspan>\n              <span class=\"chip\"><span class=\"d\"><\u002Fspan> 3 weeks<\u002Fspan>\n              <span class=\"chip\"><span class=\"d\"><\u002Fspan> Solo project<\u002Fspan>\n            <\u002Fdiv>\n            <p class=\"label\">The Challenge<\u002Fp>\n            <p class=\"lede\">A small online bookshop had <b>months of transaction data scattered across spreadsheets<\u002Fb> but no clear view of what was selling, when, or where — so stocking and promotion decisions were mostly guesswork.<\u002Fp>\n          <\u002Fdiv>\n        <\u002Fsection>\n\n        <!-- ② MY ROLE -->\n        <section class=\"section o\" id=\"s2\" data-screen-label=\"Section 2 — My Role &amp; What I Did\">\n          <button class=\"hot o\" data-target=\"s2\" aria-label=\"Hotspot 2: My Role and What I Did\"><span>2<\u002Fspan><\u002Fbutton>\n          <div class=\"reveal\">\n            <button class=\"x\" data-close=\"\" aria-label=\"Close\">✕<\u002Fbutton>\n            <h4><span class=\"n\">2<\u002Fspan> My Role &amp; What I Did<\u002Fh4>\n            <p>Use your Action → Tools → Result bullet as a base. Describe your actions, the tools you used, and how you contributed.<\u002Fp>\n          <\u002Fdiv>\n          <div class=\"section-inner role\">\n            <h2 class=\"h2\">My Role &amp; What I Did<\u002Fh2>\n            <div class=\"grid\">\n              <ul class=\"did\">\n                <li>Cleaned and merged several raw <b>CSV exports<\u002Fb> into one tidy dataset with <b>pandas<\u002Fb><\u002Fli>\n                <li>Wrote reusable functions to aggregate sales by <b>category, month, and region<\u002Fb><\u002Fli>\n                <li>Built clear charts in <b>matplotlib<\u002Fb> to surface trends and outliers<\u002Fli>\n                <li>Summarised the findings into a short, plain-language <b>recommendations note<\u002Fb><\u002Fli>\n              <\u002Ful>\n              <div class=\"toolbox\">\n                <p class=\"label\">Tools I Used<\u002Fp>\n                <div class=\"tools\">\n                  <span class=\"tool key\">Python<\u002Fspan>\n                  <span class=\"tool\">pandas<\u002Fspan>\n                  <span class=\"tool\">matplotlib<\u002Fspan>\n                  <span class=\"tool\">Jupyter<\u002Fspan>\n                  <span class=\"tool\">Excel<\u002Fspan>\n                <\u002Fdiv>\n                <p class=\"atr\"><b>Role:<\u002Fb> Data Analyst (self-initiated)<\u002Fp>\n              <\u002Fdiv>\n            <\u002Fdiv>\n          <\u002Fdiv>\n        <\u002Fsection>\n\n        <!-- ③ RESULT -->\n        <section class=\"section t\" id=\"s3\" data-screen-label=\"Section 3 — The Result &amp; What I Learned\">\n          <button class=\"hot t\" data-target=\"s3\" aria-label=\"Hotspot 3: The Result and What I Learned\"><span>3<\u002Fspan><\u002Fbutton>\n          <div class=\"reveal\">\n            <button class=\"x\" data-close=\"\" aria-label=\"Close\">✕<\u002Fbutton>\n            <h4><span class=\"n\">3<\u002Fspan> The Result &amp; What I Learned<\u002Fh4>\n            <p>Share the outcome — with numbers if you can. Then add what you learned or improved along the way.<\u002Fp>\n          <\u002Fdiv>\n          <div class=\"section-inner results\">\n            <h2 class=\"h2\">The Result &amp; What I Learned<\u002Fh2>\n\n            <div class=\"figure\">\n              <div class=\"panel\">\n                <p class=\"panel-title\">Sales dashboard <span class=\"tag\">analysis.ipynb<\u002Fspan><\u002Fp>\n                <div class=\"kpis\">\n                  <div class=\"kpi\"><div class=\"k-num\" style=\"color:var(--teal)\">12,480<\u002Fdiv><div class=\"k-cap\">Transactions analysed<\u002Fdiv><\u002Fdiv>\n                  <div class=\"kpi\"><div class=\"k-num\" style=\"color:var(--teal)\">68%<\u002Fdiv><div class=\"k-cap\">Revenue from top 3 categories<\u002Fdiv><\u002Fdiv>\n                  <div class=\"kpi\"><div class=\"k-num\" style=\"color:var(--teal)\">−22%<\u002Fdiv><div class=\"k-cap\">Summer dip identified<\u002Fdiv><\u002Fdiv>\n                <\u002Fdiv>\n                <div style=\"display:grid;grid-template-columns:1.15fr 1fr;gap:22px;align-items:end;\">\n                  <div>\n                    <p class=\"label\" style=\"margin-bottom:12px;\">Revenue by category<\u002Fp>\n                    <svg viewBox=\"0 0 420 200\" style=\"width:100%;height:auto;display:block\">\n                      <g transform=\"translate(8,8)\">\n                        <line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"158\" stroke=\"#d9e6e1\" stroke-width=\"2\"><\u002Fline>\n                        <line x1=\"0\" y1=\"158\" x2=\"404\" y2=\"158\" stroke=\"#d9e6e1\" stroke-width=\"2\"><\u002Fline>\n                        <g font-family=\"monospace\" font-size=\"11\" fill=\"#7b8694\" text-anchor=\"middle\">\n                          <rect x=\"22\" y=\"36\" width=\"48\" height=\"122\" rx=\"4\" fill=\"#008675\"><\u002Frect>\n                          <rect x=\"98\" y=\"64\" width=\"48\" height=\"94\" rx=\"4\" fill=\"#03a589\"><\u002Frect>\n                          <rect x=\"174\" y=\"90\" width=\"48\" height=\"68\" rx=\"4\" fill=\"#3bb89e\"><\u002Frect>\n                          <rect x=\"250\" y=\"120\" width=\"48\" height=\"38\" rx=\"4\" fill=\"#9bd6c8\"><\u002Frect>\n                          <rect x=\"326\" y=\"134\" width=\"48\" height=\"24\" rx=\"4\" fill=\"#c4e6dd\"><\u002Frect>\n                          <text x=\"46\" y=\"174\">Fiction<\u002Ftext>\n                          <text x=\"122\" y=\"174\">Study<\u002Ftext>\n                          <text x=\"198\" y=\"174\">Kids<\u002Ftext>\n                          <text x=\"274\" y=\"174\">Tech<\u002Ftext>\n                          <text x=\"350\" y=\"174\">Other<\u002Ftext>\n                        <\u002Fg>\n                      <\u002Fg>\n                    <\u002Fsvg>\n                  <\u002Fdiv>\n                  <div>\n                    <p class=\"label\" style=\"margin-bottom:12px;\">Monthly revenue trend<\u002Fp>\n                    <svg viewBox=\"0 0 360 200\" style=\"width:100%;height:auto;display:block\">\n                      <g transform=\"translate(8,8)\">\n                        <line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"158\" stroke=\"#d9e6e1\" stroke-width=\"2\"><\u002Fline>\n                        <line x1=\"0\" y1=\"158\" x2=\"344\" y2=\"158\" stroke=\"#d9e6e1\" stroke-width=\"2\"><\u002Fline>\n                        <defs>\n                          <linearGradient id=\"tr\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n                            <stop offset=\"0\" stop-color=\"#008675\" stop-opacity=\"0.22\"><\u002Fstop>\n                            <stop offset=\"1\" stop-color=\"#008675\" stop-opacity=\"0\"><\u002Fstop>\n                          <\u002FlinearGradient>\n                        <\u002Fdefs>\n                        <polygon points=\"0,70 57,52 114,86 171,120 228,108 285,40 342,26 342,158 0,158\" fill=\"url(#tr)\"><\u002Fpolygon>\n                        <polyline points=\"0,70 57,52 114,86 171,120 228,108 285,40 342,26\" fill=\"none\" stroke=\"#008675\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><\u002Fpolyline>\n                        <circle cx=\"171\" cy=\"120\" r=\"4.5\" fill=\"#fff\" stroke=\"#008675\" stroke-width=\"3\"><\u002Fcircle>\n                        <circle cx=\"342\" cy=\"26\" r=\"4.5\" fill=\"#008675\"><\u002Fcircle>\n                      <\u002Fg>\n                    <\u002Fsvg>\n                  <\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n              <p class=\"cap-mono\">// charts generated in matplotlib — values illustrative of the project's findings<\u002Fp>\n            <\u002Fdiv>\n\n            <p class=\"learned\"><span class=\"q\">What I learned:<\u002Fspan> that cleaning and shaping the data is most of the job — and that a single clear chart persuades people far better than a table of numbers. The shop now restocks its top categories ahead of demand.<\u002Fp>\n          <\u002Fdiv>\n        <\u002Fsection>\n\n      <\u002Fdiv>\n    <\u002Fdiv>\n\n    <div class=\"legend\">Click each <b>numbered hotspot<\u002Fb> to preview the “what to write” note — the page itself is the filled-in example.<\u002Fdiv>\n  <\u002Fdiv>\n\n  <script src=\"fb407d20-9074-42b3-9224-e0b8c59353c2\"><\u002Fscript>\n\n\n<\u002Fbody><\u002Fhtml>"
+  </script>
+</body>
+</html>
